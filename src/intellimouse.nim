@@ -80,12 +80,27 @@ proc readProperty*(m: IntelliMouse, prop: uint8,
   req[1] = prop
   req[2] = uint8(if reqData.len > 0: reqData.len else: 1)
   for i, b in reqData: req[3 + i] = b
-  discard hidSendFeatureReport(m.hidDev, addr req[0], csize_t(req.len))
+  let sent = hidSendFeatureReport(m.hidDev, addr req[0], csize_t(req.len))
+  if sent < 0:
+    raise newException(IOError,
+      "failed to send read request to device: check permissions (udev rule / sudo)")
   sleep(50)
   var resp = newSeq[uint8](m.params.readReportLen)
-  discard hidGetInputReport(m.hidDev, addr resp[0], csize_t(resp.len))
+  # hidapi requires the report ID to be pre-filled in data[0] before
+  # hid_get_input_report(); without it the call fails (returns -1) and resp
+  # is left all-zero, which used to surface later as an IndexDefect on an
+  # empty result seq rather than a clear error here.
+  resp[0] = m.params.readReportId
+  let got = hidGetInputReport(m.hidDev, addr resp[0], csize_t(resp.len))
   sleep(50)
-  let dataLen = int(resp[3])
+  if got < 4:
+    raise newException(IOError,
+      "no response from device: check permissions (udev rule / sudo), " &
+      "or the device may be disconnected")
+  let dataLen = min(int(resp[3]), resp.len - 4)
+  if dataLen == 0:
+    raise newException(IOError,
+      "device returned an empty response for property 0x" & $prop)
   result = resp[4 ..< 4 + dataLen]
 
 # ── virtual interface ────────────────────────────────────────────────────────
